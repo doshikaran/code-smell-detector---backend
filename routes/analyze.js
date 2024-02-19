@@ -17,58 +17,110 @@ router.post("/detect-long-method", async (request, response) => {
 
   try {
     const code = await fs.readFile(filePath, "utf8");
+    const comments = [];
     const parsed = JSXParser.parse(code, {
       ecmaVersion: "latest",
       sourceType: "module",
+      onComment: comments, 
+      locations: true 
     });
-    let longMethodsDetails = "";
-    const THRESHOLD = 15;
 
-    const calculateLineNumber = (charPosition) => {
-      return code.substring(0, charPosition).split("\n").length;
+    let feedbackDetails = "";
+    const THRESHOLD = 15; 
+    let shortestMethod = { name: "", lineCount: Infinity };
+    const isLineInComment = (lineNumber) => comments.some(comment => comment.loc.start.line <= lineNumber && comment.loc.end.line >= lineNumber);
+    const getExecutableLineCount = (startLine, endLine) => {
+      const lines = code.split("\n").slice(startLine - 1, endLine);
+      return lines.filter((line, index) => {
+        const lineNumber = startLine + index;
+        return !isLineInComment(lineNumber) && line.trim().length;
+      }).length;
     };
 
-    const calculateLines = (node) => {
-      const lines = code.substring(node.start, node.end).split("\n").length;
-      return lines;
-    };
-
-    const getFunctionName = (node) => {
-      if (node.id && node.id.name) {
-        return node.id.name;
-      } else if (
-        node.type === "ArrowFunctionExpression" ||
-        node.type === "FunctionExpression" ||
-        node.type === "FunctionDeclaration"
-      ) {
-        return "anonymous function";
-      }
-      return "unnamed";
-    };
-
+    
     acornWalk.simple(parsed, {
       Function(node) {
-        const lines = calculateLines(node);
-        if (lines > THRESHOLD) {
-          const startLine = calculateLineNumber(node.start);
-          const endLine = calculateLineNumber(node.end);
-          longMethodsDetails += `Lets gooooooo!\nWe have detectd a long method detected.\nCheckout ${getFunctionName(
-            node
-          )}. Ahh thats too long.\n${getFunctionName(node)} starts at line ${startLine} and ends at line ${endLine}.\nThe total lines are ${lines}.\nSo as your Code Doctor I would suggest you to refactor it.\n`;
+        const startLine = node.loc.start.line;
+        const endLine = node.loc.end.line;
+        const executableLines = getExecutableLineCount(startLine, endLine);
+        const functionName = node.id ? node.id.name : "anonymous function";
+        if (executableLines < shortestMethod.lineCount) {
+          shortestMethod = { name: functionName, lineCount: executableLines };
+        }
+        if (executableLines > THRESHOLD) {
+          feedbackDetails += `Lets gooooooo!\nWe have detected a long method.\nYour function ${functionName} seems to be long.\nExecutable Lines: ${executableLines}, Start: ${startLine}, End: ${endLine}.`;
         }
       },
     });
-
-    if (longMethodsDetails === "") {
-      response.send("Damn looks like your code is clean. Good going !\nNo long methods detected.");
-    } else {
-      response.send(longMethodsDetails.trim());
+    if (!feedbackDetails) {
+      feedbackDetails = `Damn looks like your code is clean. Good going !\nNo long methods detected.`;
     }
+    response.send(feedbackDetails);
   } catch (error) {
     console.error(error);
     response.status(500).send("Error processing the file.");
   }
 });
+// router.post("/detect-long-method", async (request, response) => {
+//   const { filePath } = request.body;
+//   if (!filePath) {
+//     return response.status(400).send("File path is required.");
+//   }
+
+//   try {
+//     const code = await fs.readFile(filePath, "utf8");
+//     const parsed = JSXParser.parse(code, {
+//       ecmaVersion: "latest",
+//       sourceType: "module",
+//     });
+//     let longMethodsDetails = "";
+//     const THRESHOLD = 15;
+
+//     const calculateLineNumber = (charPosition) => {
+//       return code.substring(0, charPosition).split("\n").length;
+//     };
+
+//     const calculateLines = (node) => {
+//       const lines = code.substring(node.start, node.end).split("\n").length;
+//       return lines;
+//     };
+
+//     const getFunctionName = (node) => {
+//       if (node.id && node.id.name) {
+//         return node.id.name;
+//       } else if (
+//         node.type === "ArrowFunctionExpression" ||
+//         node.type === "FunctionExpression" ||
+//         node.type === "FunctionDeclaration"
+//       ) {
+//         return "anonymous function";
+//       }
+//       return "unnamed";
+//     };
+
+//     acornWalk.simple(parsed, {
+//       Function(node) {
+//         const lines = calculateLines(node);
+//         if (lines > THRESHOLD) {
+//           const startLine = calculateLineNumber(node.start);
+//           const endLine = calculateLineNumber(node.end);
+//           longMethodsDetails += `Lets gooooooo!\nWe have detectd a long method detected.\nCheckout ${getFunctionName(
+//             node
+//           )}. Ahh thats too long.\n${getFunctionName(node)} starts at line ${startLine} and ends at line ${endLine}.\nThe total lines are ${lines}.\nSo as your Code Doctor I would suggest you to refactor it.\n`;
+//         }
+//       },
+//     });
+
+//     if (longMethodsDetails === "") {
+//       response.send("Damn looks like your code is clean. Good going !\nNo long methods detected.");
+//     } else {
+//       response.send(longMethodsDetails.trim());
+//     }
+//   } catch (error) {
+//     console.error(error);
+//     response.status(500).send("Error processing the file.");
+//   }
+// });
 
 // detect of crowded parameter list
 router.post("/detect-long-parameter-list", async (req, res) => {
