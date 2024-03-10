@@ -2,9 +2,9 @@ const acorn = require("acorn");
 const acornJSX = require("acorn-jsx");
 const express = require("express");
 const acornWalk = require("acorn-walk");
-// const fs = require("fs-extra");
+const esprima = require('esprima');
 const fs = require("fs").promises; 
-
+const estraverse = require("estraverse");
 const router = express.Router();
 const JSXParser = acorn.Parser.extend(acornJSX());
 
@@ -14,7 +14,6 @@ router.post("/detect-long-method", async (request, response) => {
   if (!filePath) {
     return response.status(400).send("File path is required.");
   }
-
   try {
     const code = await fs.readFile(filePath, "utf8");
     const comments = [];
@@ -24,7 +23,6 @@ router.post("/detect-long-method", async (request, response) => {
       onComment: comments, 
       locations: true 
     });
-
     let feedbackDetails = "";
     const THRESHOLD = 15; 
     let shortestMethod = { name: "", lineCount: Infinity };
@@ -36,8 +34,6 @@ router.post("/detect-long-method", async (request, response) => {
         return !isLineInComment(lineNumber) && line.trim().length;
       }).length;
     };
-
-    
     acornWalk.simple(parsed, {
       Function(node) {
         const startLine = node.loc.start.line;
@@ -61,66 +57,6 @@ router.post("/detect-long-method", async (request, response) => {
     response.status(500).send("Error processing the file.");
   }
 });
-// router.post("/detect-long-method", async (request, response) => {
-//   const { filePath } = request.body;
-//   if (!filePath) {
-//     return response.status(400).send("File path is required.");
-//   }
-
-//   try {
-//     const code = await fs.readFile(filePath, "utf8");
-//     const parsed = JSXParser.parse(code, {
-//       ecmaVersion: "latest",
-//       sourceType: "module",
-//     });
-//     let longMethodsDetails = "";
-//     const THRESHOLD = 15;
-
-//     const calculateLineNumber = (charPosition) => {
-//       return code.substring(0, charPosition).split("\n").length;
-//     };
-
-//     const calculateLines = (node) => {
-//       const lines = code.substring(node.start, node.end).split("\n").length;
-//       return lines;
-//     };
-
-//     const getFunctionName = (node) => {
-//       if (node.id && node.id.name) {
-//         return node.id.name;
-//       } else if (
-//         node.type === "ArrowFunctionExpression" ||
-//         node.type === "FunctionExpression" ||
-//         node.type === "FunctionDeclaration"
-//       ) {
-//         return "anonymous function";
-//       }
-//       return "unnamed";
-//     };
-
-//     acornWalk.simple(parsed, {
-//       Function(node) {
-//         const lines = calculateLines(node);
-//         if (lines > THRESHOLD) {
-//           const startLine = calculateLineNumber(node.start);
-//           const endLine = calculateLineNumber(node.end);
-//           longMethodsDetails += `Lets gooooooo!\nWe have detectd a long method detected.\nCheckout ${getFunctionName(
-//             node
-//           )}. Ahh thats too long.\n${getFunctionName(node)} starts at line ${startLine} and ends at line ${endLine}.\nThe total lines are ${lines}.\nSo as your Code Doctor I would suggest you to refactor it.\n`;
-//         }
-//       },
-//     });
-
-//     if (longMethodsDetails === "") {
-//       response.send("Damn looks like your code is clean. Good going !\nNo long methods detected.");
-//     } else {
-//       response.send(longMethodsDetails.trim());
-//     }
-//   } catch (error) {
-//     console.error(error);
-//     response.status(500).send("Error processing the file.");
-//   }
-// });
 
 // detect of crowded parameter list
 router.post("/detect-long-parameter-list", async (req, res) => {
@@ -128,7 +64,6 @@ router.post("/detect-long-parameter-list", async (req, res) => {
   if (!filePath) {
     return res.status(400).send("File path is required.");
   }
-
   try {
     const code = await fs.readFile(filePath, "utf8");
     const parsed = JSXParser.parse(code, {
@@ -150,7 +85,6 @@ router.post("/detect-long-parameter-list", async (req, res) => {
       }
       return "unnamed";
     };
-
     acornWalk.simple(parsed, {
       Function(node) {
         const paramCount = node.params.length;
@@ -173,7 +107,7 @@ router.post("/detect-long-parameter-list", async (req, res) => {
   }
 });
 
-// detect of duplicate code
+// detect duplicate code
 const jaccardSimilarity = (setA, setB) => {
   setA = new Set(setA);
   setB = new Set(setB);
@@ -181,79 +115,219 @@ const jaccardSimilarity = (setA, setB) => {
   const union = new Set([...setA, ...setB]);
   return intersection.size / union.size;
 };
+const normalizeCode = (code) => {
+  code = code.replace(/\/\/.*$/gm, '');
+  code = code.replace(/\/\*[\s\S]*?\*\//gm, '');
+  code = code.split('\n').map(line => line.trim()).join('\n');
+  code = code.replace(/\s+/g, ' ');
+  return code;
+};
 
-function refactorDuplicatedCode(codeFragment1, codeFragment2) {
-  const lines1 = codeFragment1.split("\n").map((line) => line.trim());
-  const lines2 = codeFragment2.split("\n").map((line) => line.trim());
-  const commonLines = lines1.filter((line) => lines2.includes(line));
-  if (commonLines.length === 0) {
+const generateAST = (code) => {
+  try {
+    const ast = esprima.parseScript(code);
+    return ast;
+  } catch (e) {
+    console.error('Error generating AST:', e);
+    throw e;
+  }
+};
+
+const areNodesStructurallySimilar = (node1, node2) => {
+  if (!node1 && !node2) return true;
+  if (!node1 || !node2 || node1.type !== node2.type) return false;
+
+  switch (node1.type) {
+    case 'FunctionDeclaration':
+    case 'FunctionExpression':
+    case 'ArrowFunctionExpression':
+      return areNodesStructurallySimilar(node1.body, node2.body);
+    case 'BlockStatement':
+    case 'Program': 
+      if (node1.body.length !== node2.body.length) return false;
+      return node1.body.every((childNode, index) => 
+        areNodesStructurallySimilar(childNode, node2.body[index]));
+    case 'ExpressionStatement':
+      return areNodesStructurallySimilar(node1.expression, node2.expression);
+    case 'IfStatement':
+      return areNodesStructurallySimilar(node1.test, node2.test) &&
+             areNodesStructurallySimilar(node1.consequent, node2.consequent) &&
+             areNodesStructurallySimilar(node1.alternate, node2.alternate);
+    case 'BinaryExpression':
+    case 'LogicalExpression':
+      return node1.operator === node2.operator &&
+             areNodesStructurallySimilar(node1.left, node2.left) &&
+             areNodesStructurallySimilar(node1.right, node2.right);
+    case 'CallExpression':
+      return areNodesStructurallySimilar(node1.callee, node2.callee) &&
+             node1.arguments.length === node2.arguments.length &&
+             node1.arguments.every((arg, index) => 
+               areNodesStructurallySimilar(arg, node2.arguments[index]));
+    case 'Literal':
+    case 'Identifier':
+      return node1.name === node2.name || node1.value === node2.value;
+    default:
+      return false;
+  }
+};
+
+const areASTsStructurallySimilar = (ast1, ast2) => {
+  return areNodesStructurallySimilar(ast1, ast2);
+}
+
+const extractCommonLines = (lines1, lines2) => {
+  return lines1.filter(line => lines2.includes(line));
+};
+
+const createFunctionFromCommonLines = (commonLines, functionName) => {
+  return `function ${functionName}() {\n  ${commonLines.join("\n  ")}\n}\n`;
+};
+
+const replaceCommonLinesWithFunctionCall = (lines, commonLines, functionName) => {
+  let isCommonLine = false;
+  return lines.map(line => {
+    if (commonLines.includes(line)) {
+      if (!isCommonLine) {
+        isCommonLine = true; 
+        return `${functionName}();`
+      }
+      return null; 
+    } else {
+      isCommonLine = false;
+      return line;
+    }
+  }).filter(line => line !== null).join("\n");
+};
+const refactorType1 = (codeFragment1, codeFragment2) => {
+  const lines1 = codeFragment1.split("\n").map(line => line.trim());
+  const lines2 = codeFragment2.split("\n").map(line => line.trim());
+  const commonLines = extractCommonLines(lines1, lines2);
+  if (commonLines.length > 0) {
+    const functionName = "refactoredFunction";
+    const newFunction = createFunctionFromCommonLines(commonLines, functionName);
+    const newCodeFragment1 = replaceCommonLinesWithFunctionCall(lines1, commonLines, functionName);
+    const newCodeFragment2 = replaceCommonLinesWithFunctionCall(lines2, commonLines, functionName);
     return {
-      refactored: false,
-      codeFragment1,
-      codeFragment2,
-      refactoredFunction: "",
+      refactored: true,
+      codeFragment1: newCodeFragment1,
+      codeFragment2: newCodeFragment2,
+      refactoredFunction: newFunction,
     };
   }
-  const functionName = "refactoredCommonFunction";
-  const refactoredFunction = `function ${functionName}() {${commonLines.join(
-    "\n  "
-  )}}\n`;
-  const replaceCommonLines = (lines) => {
-    let replaced = [];
-    let commonFound = false;
-    lines.forEach((line) => {
-      if (commonLines.includes(line.trim())) {
-        if (!commonFound) {
-          replaced.push(`${functionName}();`);
-          commonFound = true;
-        }
-      } else {
-        replaced.push(line);
-        commonFound = false;
-      }
-    });
-    return replaced.join("\n");
+  return {
+    refactored: false,
+    codeFragment1,
+    codeFragment2,
+    refactoredFunction: "",
   };
-  const newCodeFragment1 = replaceCommonLines(lines1);
-  const newCodeFragment2 = replaceCommonLines(lines2);
+};
+const findCorrespondingNode = (node, rootNode) => {
+  let foundNode = null;
+  estraverse.traverse(rootNode, {
+    enter: (childNode) => {
+      if (areNodesStructurallySimilar(node, childNode)) {
+        foundNode = childNode;
+        this.break();
+      }
+    }
+  });
+  return foundNode;
+};
+const compareASTNodes = (node1, node2) => {
+  const varyingParts = { identifiers: new Map(), literals: new Map() };
+  estraverse.traverse(node1, {
+    enter: (childNode1) => {
+      const correspondingNode2 = findCorrespondingNode(childNode1, node2);
+      if (!correspondingNode2) {
+        return estraverse.VisitorOption.Skip;
+      }
+      
+      switch (childNode1.type) {
+        case 'Identifier':
+          if (childNode1.name !== correspondingNode2.name) {
+            varyingParts.identifiers.set(childNode1.name, correspondingNode2.name);
+          }
+          break;
+        case 'Literal':
+          if (childNode1.value !== correspondingNode2.value) {
+            varyingParts.literals.set(childNode1.value, correspondingNode2.value);
+          }
+          break;
+      }
+    }
+  });
+
+  return varyingParts;
+};
+const extractVaryingParts = (codeFragment1, codeFragment2) => {
+  const ast1 = generateAST(codeFragment1);
+  const ast2 = generateAST(codeFragment2);
+  return compareASTNodes(ast1, ast2);
+  
+};
+
+const refactorType2 = (codeFragment1, codeFragment2, varyingParts) => {
+  let refactoredFragment1 = codeFragment1;
+  let refactoredFragment2 = codeFragment2;
+  for (const [original, replacement] of Object.entries(varyingParts)) {
+    const regex = new RegExp(`\\b${original}\\b`, 'g');
+    refactoredFragment1 = refactoredFragment1.replace(regex, replacement);
+    refactoredFragment2 = refactoredFragment2.replace(regex, replacement);
+  }
+  const parameterNames = Object.keys(varyingParts).join(', ');
+  const arguments1 = Object.keys(varyingParts).join(', '); 
+  const arguments2 = Object.values(varyingParts).join(', ');
+  
+  const generalizedFunctionBody = '/* Generalized function body based on the operation */';
+  const functionName = "refactoredType2Function";
+  const newFunction = `function ${functionName}(${parameterNames}) {\n  ${generalizedFunctionBody}\n}`;
+
+  let newCodeFragment1 = `${functionName}(${arguments1});`;
+  let newCodeFragment2 = `${functionName}(${arguments2});`;
+  
   return {
     refactored: true,
     codeFragment1: newCodeFragment1,
     codeFragment2: newCodeFragment2,
-    refactoredFunction,
+    refactoredFunction: newFunction,
   };
-}
-
+};
 router.post("/detect-duplicate-code", async (request, response) => {
   const { filePath } = request.body;
   if (!filePath) {
     return response.status(400).send("File path is required.");
   }
-
   try {
     const fileContent = await fs.readFile(filePath, "utf8");
-    const codeFragments = fileContent
-      .split("\n\n")
-      .map((block) => block.trim());
-    let duplicated = false;
-    let result = null;
+    const normalizedContent = normalizeCode(fileContent);
+    const codeFragments = normalizedContent.split(/(?=function\s*\w*\s*\()/);
+    if (codeFragments[0].trim() === '') {
+      codeFragments.shift();
+    }
     let responseMessage = "";
 
     if (codeFragments.length >= 2) {
-      const similarity = jaccardSimilarity(
-        new Set(codeFragments[0]),
-        new Set(codeFragments[1])
-      );
+      // Type-1 Clone Detection and Refactoring
+      const setA = new Set(codeFragments[0].split('\n').map(line => line.trim()));
+      const setB = new Set(codeFragments[1].split('\n').map(line => line.trim()));
+      const similarity = jaccardSimilarity(setA, setB);
+      
       if (similarity > 0.75) {
-        duplicated = true;
-        result = refactorDuplicatedCode(codeFragments[0], codeFragments[1]);
-        responseMessage += "Duplicated code detected.\n";
-        responseMessage += `Duplicate code part1 is:\n${codeFragments[0]}\n`;
-        responseMessage += `Duplicate code part2 is:\n${codeFragments[1]}\n`;
-        responseMessage += "Here is the refactored solution for you:\n";
-        responseMessage += result.refactoredFunction; // Assuming refactorDuplicatedCode returns an object with refactoredFunction
+        const result = refactorType1(codeFragments[0], codeFragments[1]);
+        responseMessage += "Type-1 duplicated code detected and refactored.\n";
+        responseMessage += `Refactored Function:\n${result.refactoredFunction}\n`;
       } else {
-        responseMessage = "No significant duplicates found.";
+        // Type-2 Clone Detection and Refactoring
+        const ast1 = generateAST(codeFragments[0]);
+        const ast2 = generateAST(codeFragments[1]);
+        if (areASTsStructurallySimilar(ast1, ast2)) {
+          const varyingParts = extractVaryingParts(ast1, ast2);
+          const result = refactorType2(codeFragments[0], codeFragments[1], varyingParts);
+          responseMessage += "Type-2 structural duplicate detected and refactored.\n";
+          responseMessage += `Refactored Function:\n${result.refactoredFunction}\n`;
+        } else {
+          responseMessage = "No significant duplicates found.";
+        }
       }
     } else {
       responseMessage = "Not enough code fragments for comparison.";
@@ -267,98 +341,46 @@ router.post("/detect-duplicate-code", async (request, response) => {
   }
 });
 
-module.exports = router;
-
-
-// TO DO
-// add the line number while reading the file
-// 1. python and js files should be supported
-  //// router.post("/detect-long-method", async (request, response) => {
+// router.post("/detect-duplicate-code", async (request, response) => {
 //   const { filePath } = request.body;
 //   if (!filePath) {
 //     return response.status(400).send("File path is required.");
 //   }
+
 //   try {
-//     const code = await fs.readFile(filePath, "utf8");
-//     let longMethodsDetails = "";
-//     const THRESHOLD = 15;
+//     const fileContent = await fs.readFile(filePath, "utf8");
+//     const codeFragments = fileContent
+//       .split("\n\n")
+//       .map((block) => block.trim());
+//     let duplicated = false;
+//     let result = null;
+//     let responseMessage = "";
 
-//     // Determine file type (Python or JavaScript) based on file extension
-//     const fileType = filePath.split('.').pop();
-
-//     if (fileType === 'js' || fileType === 'jsx') {
-//       // Parse JavaScript file
-//       const parsed = acorn.parse(code, {
-//         ecmaVersion: "latest",
-//         sourceType: "module",
-//       });
-
-//       acornWalk.simple(parsed, {
-//         Function(node) {
-//           const lines = calculateLines(code, node);
-//           if (lines > THRESHOLD) {
-//             const startLine = calculateLineNumber(code, node.start);
-//             const endLine = calculateLineNumber(code, node.end);
-//             longMethodsDetails += output(getFunctionName(node), startLine, endLine, lines);
-//           }
-//         },
-//       });
-//     } else if (fileType === 'py') {
-//       // Rudimentary Python function detection
-//       longMethodsDetails += detectLongMethodsPython(code, THRESHOLD);
+//     if (codeFragments.length >= 2) {
+//       const similarity = jaccardSimilarity(
+//         new Set(codeFragments[0]),
+//         new Set(codeFragments[1])
+//       );
+//       if (similarity > 0.75) {
+//         duplicated = true;
+//         result = refactorDuplicatedCode(codeFragments[0], codeFragments[1]);
+//         responseMessage += "Duplicated code detected.\n";
+//         responseMessage += `Duplicate code part1 is:\n${codeFragments[0]}\n`;
+//         responseMessage += `Duplicate code part2 is:\n${codeFragments[1]}\n`;
+//         responseMessage += "Here is the refactored solution for you:\n";
+//         responseMessage += result.refactoredFunction; // Assuming refactorDuplicatedCode returns an object with refactoredFunction
+//       } else {
+//         responseMessage = "No significant duplicates found.";
+//       }
 //     } else {
-//       return response.status(400).send("Unsupported file type.");
+//       responseMessage = "Not enough code fragments for comparison.";
 //     }
 
-//     if (longMethodsDetails === "") {
-//       response.send("No long methods detected. Your code looks clean. Good going!");
-//     } else {
-//       response.send(longMethodsDetails.trim());
-//     }
+//     response.type("text/plain");
+//     response.send(responseMessage);
 //   } catch (error) {
-//     console.error(error);
+//     console.error("Error reading file:", error);
 //     response.status(500).send("Error processing the file.");
 //   }
 // });
-
-// function calculateLineNumber(code, charPosition) {
-//   return code.substring(0, charPosition).split("\n").length;
-// }
-
-// function calculateLines(code, node) {
-//   return code.substring(node.start, node.end).split("\n").length;
-// }
-
-// function getFunctionName(node) {
-//   if (node.id && node.id.name) {
-//     return node.id.name;
-//   } else if (node.type === "ArrowFunctionExpression" || node.type === "FunctionExpression" || node.type === "FunctionDeclaration") {
-//     return "anonymous function";
-//   }
-//   return "unnamed";
-// }
-
-// function output(name, startLine, endLine, lines) {
-//   return `Lets gooooooo!\nWe have detected a long method.\nCheckout ${name}. Ahh, that's too long.\n${name} starts at line ${startLine} and ends at line ${endLine}.\nThe total lines are ${lines}.\nSo as your Code Doctor, I would suggest you refactor it.\n`;
-// }
-
-
-// function detectLongMethodsPython(code, threshold) {
-//   const functionRegex = /def\s+([\w_]+)\s*\((.*?)\)\s*:/g;
-//   let match;
-//   let longMethodsDetails = "";
-  
-//   while ((match = functionRegex.exec(code)) !== null) {
-//     // This is a very naive way to estimate the function length
-//     const startLine = calculateLineNumber(code, match.index);
-//     // Look for the next def or the end of the file as an approximation
-//     const endMatch = code.substring(match.index + match[0].length).match(/def\s+[\w_]+\s*\(/);
-//     const endLine = endMatch ? startLine + calculateLineNumber(code.substring(match.index + match[0].length), endMatch.index) - 1 : calculateLineNumber(code, code.length);
-//     const lines = endLine - startLine + 1;
-//     if (lines > threshold) {
-//       longMethodsDetails += output(match[1], startLine, endLine, lines);
-//     }
-//   }
-
-//   return longMethodsDetails;
-// }
+module.exports = router;

@@ -15,7 +15,7 @@ const storage = multer.diskStorage({
 const fileFilter = (request, file, cb) => {
   const ext = path.extname(file.originalname).toLowerCase();
   if (ext !== '.js' && ext !== '.py') {
-    cb(new Error('Only .py and .js files are allowed'), false);
+    cb(new Error('Only .js files are allowed'), false);
   } else {
     cb(null, true);
   }
