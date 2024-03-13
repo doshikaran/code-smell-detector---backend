@@ -292,6 +292,7 @@ const refactorType2 = (codeFragment1, codeFragment2, varyingParts) => {
     refactoredFunction: newFunction,
   };
 };
+
 router.post("/detect-duplicate-code", async (request, response) => {
   const { filePath } = request.body;
   if (!filePath) {
@@ -340,47 +341,4 @@ router.post("/detect-duplicate-code", async (request, response) => {
     response.status(500).send("Error processing the file.");
   }
 });
-
-// router.post("/detect-duplicate-code", async (request, response) => {
-//   const { filePath } = request.body;
-//   if (!filePath) {
-//     return response.status(400).send("File path is required.");
-//   }
-
-//   try {
-//     const fileContent = await fs.readFile(filePath, "utf8");
-//     const codeFragments = fileContent
-//       .split("\n\n")
-//       .map((block) => block.trim());
-//     let duplicated = false;
-//     let result = null;
-//     let responseMessage = "";
-
-//     if (codeFragments.length >= 2) {
-//       const similarity = jaccardSimilarity(
-//         new Set(codeFragments[0]),
-//         new Set(codeFragments[1])
-//       );
-//       if (similarity > 0.75) {
-//         duplicated = true;
-//         result = refactorDuplicatedCode(codeFragments[0], codeFragments[1]);
-//         responseMessage += "Duplicated code detected.\n";
-//         responseMessage += `Duplicate code part1 is:\n${codeFragments[0]}\n`;
-//         responseMessage += `Duplicate code part2 is:\n${codeFragments[1]}\n`;
-//         responseMessage += "Here is the refactored solution for you:\n";
-//         responseMessage += result.refactoredFunction; // Assuming refactorDuplicatedCode returns an object with refactoredFunction
-//       } else {
-//         responseMessage = "No significant duplicates found.";
-//       }
-//     } else {
-//       responseMessage = "Not enough code fragments for comparison.";
-//     }
-
-//     response.type("text/plain");
-//     response.send(responseMessage);
-//   } catch (error) {
-//     console.error("Error reading file:", error);
-//     response.status(500).send("Error processing the file.");
-//   }
-// });
 module.exports = router;

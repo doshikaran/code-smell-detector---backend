@@ -14,7 +14,6 @@ router.post("/register", async (request, response) => {
       return response.status(400).json({ msg: "User already exists" })
     }
     const userId = uuidv4();
-    // const hashedpassword = await bcrypt.hashSync(password, 10);
     user = new User({ userId, fullname, username, password });
     await user.save();
     response.status(201).json({ msg: "User registered successfully", userId});
@@ -45,37 +44,3 @@ router.post("/login", async (request, response) => {
 
 
 module.exports = router;
-
-
-// router.get("/user/:username", async (request, response) => {
-//   try {
-//     const username = request.params.username;
-//     const user = await User.findOne({ username }).select(
-//       "username fullname password"
-//     );
-//     if (!user) {
-//       return response.status(404).json({ msg: "User not found" });
-//     }
-//     response.json({
-//       username: user.username,
-//       fullname: user.fullname,
-//       password: user.password,
-//     });
-//   } catch (err) {
-//     console.error(err);
-//     response.status(500).json({ msg: "Server error" });
-//   }
-// });
-
-
-// router.get("/user-exists/:username", async (request, response) => {
-//     try {
-//       const username = request.params.username;
-//       const userExists = await User.exists({ username });
-//       response.json({ exists: !!userExists });
-//     } catch (err) {
-//       console.error(err);
-//       response.status(500).json({ msg: "Server error" });
-//     }
-//   });
-  
